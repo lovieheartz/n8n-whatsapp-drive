@@ -1,0 +1,227 @@
+{
+  "name": "WhatsApp Drive Assistant - Fixed",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-webhook",
+        "options": {}
+      },
+      "id": "webhook-node",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.Body || '';\nconst from = $input.first().json.From || '';\nconst messageId = $input.first().json.MessageSid || '';\n\nconst text = body.trim().toUpperCase();\nconst parts = text.split(' ');\nconst command = parts[0];\nconst args = parts.slice(1);\n\nconst validCommands = ['LIST', 'DELETE', 'MOVE', 'SUMMARY', 'HELP'];\nif (!validCommands.includes(command)) {\n  return [{\n    json: {\n      error: true,\n      message: `❌ Unknown command: ${command}\\n\\nUse HELP to see available commands.`,\n      from,\n      messageId\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    command,\n    args,\n    originalText: body,\n    from,\n    messageId,\n    error: false\n  }\n}];"
+      },
+      "id": "parse-command",
+      "name": "Parse Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "HELP",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "help-check",
+      "name": "Help Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const helpText = `🤖 **WhatsApp Drive Assistant**\\n\\nAvailable commands:\\n\\n📋 **LIST /folder** - List files in folder\\n🗑️ **DELETE /path/file.pdf** - Delete file\\n📁 **MOVE /source/file.pdf /destination** - Move file\\n📄 **SUMMARY /folder** - AI summary of documents\\n❓ **HELP** - Show this help\\n\\nExample:\\n• LIST /Project X\\n• DELETE /Project X/report.pdf\\n• MOVE /Project X/report.pdf /Archive\\n\\nTry: LIST / (to see root folder)`;\\n\\nreturn [{\n  json: {\n    message: helpText,\n    from: $json.from,\n    messageId: $json.messageId\n  }\n}];"
+      },
+      "id": "help-response",
+      "name": "Help Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.command }}",
+              "rightValue": "LIST",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "list-check",
+      "name": "List Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "list",
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.args.length > 0 ? ($json.args[0] === '/' ? 'root' : $json.args[0].replace(/^\\//, '')) : 'root' }}",
+          "mode": "name"
+        }
+      },
+      "id": "google-drive-list",
+      "name": "Google Drive List",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [900, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "google-service-account",
+          "name": "Google Service Account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const files = $input.all();\nconst folderPath = $('Parse Command').first().json.args[0] || '/';\n\n// Handle errors from Google Drive\nif ($input.first().json.error) {\n  return [{\n    json: {\n      message: `❌ Error accessing folder \"${folderPath}\"\\n\\nFolder may not exist or you don't have access.\\n\\nTry: LIST / (for root folder)`,\n      from: $('Parse Command').first().json.from,\n      messageId: $('Parse Command').first().json.messageId\n    }\n  }];\n}\n\nif (!files || files.length === 0) {\n  return [{\n    json: {\n      message: `📁 Folder \"${folderPath}\" is empty\\n\\n💡 Try:\\n• LIST / (root folder)\\n• Create some files in Google Drive first`,\n      from: $('Parse Command').first().json.from,\n      messageId: $('Parse Command').first().json.messageId\n    }\n  }];\n}\n\nlet response = `📁 Files in \"${folderPath}\":\\n\\n`;\nfiles.forEach((item, index) => {\n  const file = item.json;\n  const icon = file.mimeType && file.mimeType.includes('folder') ? '📁' : '📄';\n  const size = file.size ? ` (${formatFileSize(file.size)})` : '';\n  response += `${index + 1}. ${icon} ${file.name}${size}\\n`;\n});\n\nfunction formatFileSize(bytes) {\n  if (bytes === 0) return '0 B';\n  const k = 1024;\n  const sizes = ['B', 'KB', 'MB', 'GB'];\n  const i = Math.floor(Math.log(bytes) / Math.log(k));\n  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];\n}\n\nreturn [{\n  json: {\n    message: response,\n    from: $('Parse Command').first().json.from,\n    messageId: $('Parse Command').first().json.messageId\n  }\n}];"
+      },
+      "id": "format-file-list",
+      "name": "Format File List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "accountSid": "={{ $env.TWILIO_ACCOUNT_SID }}",
+        "authToken": "={{ $env.TWILIO_AUTH_TOKEN }}",
+        "fromPhoneNumber": "={{ $env.TWILIO_WHATSAPP_NUMBER }}",
+        "toPhoneNumber": "={{ $json.from }}",
+        "message": "={{ $json.message }}"
+      },
+      "id": "send-whatsapp-response",
+      "name": "Send WhatsApp Response",
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "credentials": {
+        "twilioApi": {
+          "id": "twilio-credentials",
+          "name": "Twilio API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Command": {
+      "main": [
+        [
+          {
+            "node": "Help Check",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Help Check": {
+      "main": [
+        [
+          {
+            "node": "Help Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Help Response": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Check": {
+      "main": [
+        [
+          {
+            "node": "Google Drive List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive List": {
+      "main": [
+        [
+          {
+            "node": "Format File List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format File List": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "whatsapp-drive-assistant-fixed"
+}
